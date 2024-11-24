@@ -41,10 +41,6 @@ import (
 	"sync/atomic"
 )
 
-const maxNodes = 1 << 16 // Maximum number of nodes to pre-allocate
-
-var maxHazardPointers = 2 * runtime.GOMAXPROCS(0) * 2 // 2 pointers per thread + buffer
-
 // Node represents a node in the queue.
 type Node[T comparable] struct {
 	value T
@@ -69,6 +65,7 @@ type HazardPointer[T comparable] struct{ ptr atomic.Pointer[Node[T]] }
 type HazardTable[T comparable] struct{ pointers []HazardPointer[T] }
 
 func NewHazardTable[T comparable](a *arena.Arena) *HazardTable[T] {
+	maxHazardPointers := 2 * runtime.GOMAXPROCS(0) * 2 // 2 pointers per thread + buffer
 	// Allocate hazard pointers from the arena
 	pointers := arena.MakeSlice[HazardPointer[T]](a, maxHazardPointers, maxHazardPointers)
 	return &HazardTable[T]{pointers: pointers}
@@ -140,6 +137,8 @@ type Queue[T comparable] struct {
 
 // New creates a new empty queue with pre-allocated nodes.
 func New[T comparable]() *Queue[T] {
+	const maxNodes = 1 << 16 // Maximum number of nodes to pre-allocate
+
 	mem := arena.NewArena()
 
 	// Allocate nodes array in arena.
