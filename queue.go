@@ -41,10 +41,9 @@ import (
 	"sync/atomic"
 )
 
-const (
-	maxNodes          = 65536 // Maximum number of nodes to pre-allocate
-	maxHazardPointers = 2048  // Maximum number of hazard pointers
-)
+const maxNodes = 1 << 16 // Maximum number of nodes to pre-allocate
+
+var maxHazardPointers = 2 * runtime.GOMAXPROCS(0) * 2 // 2 pointers per thread + buffer
 
 // Node represents a node in the queue.
 type Node[T comparable] struct {
@@ -64,14 +63,10 @@ type Node[T comparable] struct {
 // it can only be freed if no hazard pointer is protecting it.
 // This prevents the ABA problem where a node could be freed and
 // reallocated while a thread is still trying to access it.
-type HazardPointer[T comparable] struct {
-	ptr atomic.Pointer[Node[T]]
-}
+type HazardPointer[T comparable] struct{ ptr atomic.Pointer[Node[T]] }
 
 // HazardTable manages all hazard pointers using arena memory.
-type HazardTable[T comparable] struct {
-	pointers []HazardPointer[T]
-}
+type HazardTable[T comparable] struct{ pointers []HazardPointer[T] }
 
 func NewHazardTable[T comparable](a *arena.Arena) *HazardTable[T] {
 	// Allocate hazard pointers from the arena
@@ -90,9 +85,7 @@ func (ht *HazardTable[T]) Acquire() (*HazardPointer[T], int) {
 }
 
 // Release a hazard pointer.
-func (ht *HazardTable[T]) Release(index int) {
-	ht.pointers[index].ptr.Store(nil)
-}
+func (ht *HazardTable[T]) Release(index int) { ht.pointers[index].ptr.Store(nil) }
 
 // ReclamationStack is a lock-free stack for retired nodes that need to be safely reclaimed.
 // We need this structure because in a lock-free queue, we can't immediately free nodes
@@ -104,9 +97,7 @@ func (ht *HazardTable[T]) Release(index int) {
 // cause thread contention.
 // This is crucial for maintaining the lock-free property of
 // the overall queue implementation.
-type ReclamationStack[T comparable] struct {
-	head atomic.Pointer[Node[T]]
-}
+type ReclamationStack[T comparable] struct{ head atomic.Pointer[Node[T]] }
 
 // Push a node to the reclamation stack.
 func (s *ReclamationStack[T]) Push(node *Node[T]) {
@@ -140,9 +131,11 @@ type Queue[T comparable] struct {
 	freeHead atomic.Pointer[Node[T]] // *Node
 	freeTail atomic.Pointer[Node[T]] // *Node
 	nodes    []Node[T]               // Pre-allocated nodes
-	hazard   *HazardTable[T]         // Hazard pointers table
-	reclaim  ReclamationStack[T]     // Reclamation stack
-	a        *arena.Arena            // Arena memory
+
+	hazard  *HazardTable[T]     // Hazard pointers table
+	reclaim ReclamationStack[T] // Reclamation stack
+
+	a *arena.Arena // Arena memory
 }
 
 // New creates a new empty queue with pre-allocated nodes.
@@ -235,8 +228,8 @@ func (q *Queue[T]) getNode(value T) *Node[T] {
 
 		nextFreePtr := freeHeadPtr.next.Load()
 		if q.freeHead.CompareAndSwap(freeHeadPtr, nextFreePtr) {
-			// atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&freeHeadPtr.value)), unsafe.Pointer(&value))
-			// Successfully got a node from free list
+			// This node is exclusively ours.
+			// It can't be accessed by other threads until it's linked to the queue.
 			freeHeadPtr.value = value
 			freeHeadPtr.next.Store(nil)
 			return freeHeadPtr
@@ -280,31 +273,12 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 				// [11] Queue has at least one item.
 				if q.head.CompareAndSwap(headPtr, nextPtr) {
 					value := nextPtr.value
-					// [12] Return old head node to free list.
-					q.returnNode(headPtr)
+					// [12] Defer reclamation of old head.
+					q.deferReclamation(headPtr)
 					return value, true
 				}
 			}
 		}
-	}
-}
-
-// returnNode returns a node to the free list.
-func (q *Queue[T]) returnNode(node *Node[T]) {
-	for {
-		// Get current free tail.
-		freeTailPtr := q.freeTail.Load()
-
-		// Link returned node to current free tail.
-		node.next.Store(nil)
-		freeTailPtr.next.Store(node)
-
-		// Try to swing free tail to returned node.
-		if q.freeTail.CompareAndSwap(freeTailPtr, node) {
-			// Successfully linked returned node to free list.
-			return
-		}
-		// If CAS failed, try again.
 	}
 }
 
@@ -351,6 +325,25 @@ func (q *Queue[T]) isNodeHazardous(node *Node[T]) bool {
 		}
 	}
 	return false
+}
+
+// returnNode returns a node to the free list.
+func (q *Queue[T]) returnNode(node *Node[T]) {
+	for {
+		// Get current free tail.
+		freeTailPtr := q.freeTail.Load()
+
+		// Link returned node to current free tail.
+		node.next.Store(nil)
+		freeTailPtr.next.Store(node)
+
+		// Try to swing free tail to returned node.
+		if q.freeTail.CompareAndSwap(freeTailPtr, node) {
+			// Successfully linked returned node to free list.
+			return
+		}
+		// If CAS failed, try again.
+	}
 }
 
 // Empty returns true if the queue is empty.
