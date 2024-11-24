@@ -17,32 +17,46 @@ This implementation achieves wait-free progress for enqueue operations and lock-
 2. **ABA Problem Mitigation**: Instead of using counters as suggested in the original paper, this implementation uses Go's unsafe pointers as a workaround for the ABA problem.
 3. **Memory Management**: Utilizes Go's memory arenas to manage the free list, optimizing memory allocation and deallocation. (Maybe?)
 
-## Implementation Details
+### Example Usage
 
-### Data Structures
+The following example demonstrates how to use the `go-lockfree-queue` library to create a queue and perform basic enqueue and dequeue operations:
 
-1. **Node**: Represents a node in the queue.
-   - `value`: The stored value (of type `any`)
-   - `next`: Pointer to the next node (using `atomic.Pointer`)
-   - `index`: Position in the pre-allocated nodes array
+```go
+package main
 
-2. **Queue**: The main queue structure.
-   - `head`, `tail`: Pointers to the head and tail nodes
-   - `freeHead`, `freeTail`: Pointers to manage the free list
-   - `nodes`: Pre-allocated array of nodes
-   - `a`: Pointer to the memory arena
+import (
+	"fmt"
+	"github.com/ahrav/go-lockfree-queue"
+)
+
+func main() {
+	// Create a new queue.
+	q := queue.New()
+	defer q.Close() // Remember to close to free arena memory
+
+	// Enqueue some values.
+	q.Enqueue("first")
+	q.Enqueue("second")
+	q.Enqueue(123)
+
+	// Dequeue values (FIFO order).
+	if val, ok := q.Dequeue(); ok {
+		fmt.Println(val) // Prints: first
+	}
+
+	if val, ok := q.Dequeue(); ok {
+		fmt.Println(val) // Prints: second
+	}
+
+	// Check if queue is empty.
+	if !q.Empty() {
+		val, _ := q.Dequeue()
+		fmt.Println(val) // Prints: 123
+	}
+}
+
 
 ### Key Operations
-
-#### Initialization
-
-- Creates a new queue with a pre-allocated array of nodes in a memory arena.
-- Sets up an initial dummy node and links all other nodes in the free list.
-
-#### Node Management
-
-- `getNode`: Atomically retrieves a node from the free list.
-- `returnNode`: Atomically returns a node to the free list.
 
 #### Enqueue Operation
 
