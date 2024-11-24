@@ -117,25 +117,6 @@ func (q *Queue[T]) getNode(value T) *Node[T] {
 	}
 }
 
-// returnNode returns a node to the free list.
-func (q *Queue[T]) returnNode(node *Node[T]) {
-	for {
-		// Get current free tail.
-		freeTailPtr := q.freeTail.Load()
-
-		// Link returned node to current free tail.
-		node.next.Store(nil)
-		freeTailPtr.next.Store(node)
-
-		// Try to swing free tail to returned node.
-		if q.freeTail.CompareAndSwap(freeTailPtr, node) {
-			// Successfully linked returned node to free list.
-			return
-		}
-		// If CAS failed, try again.
-	}
-}
-
 // Enqueue adds a value to the tail of the queue.
 func (q *Queue[T]) Enqueue(value T) {
 	// Get a new node from the free list
@@ -165,29 +146,48 @@ func (q *Queue[T]) Enqueue(value T) {
 // Dequeue removes and returns a value from the head of the queue.
 func (q *Queue[T]) Dequeue() (T, bool) {
 	for {
-		headPtr, tailPtr := q.head.Load(), q.tail.Load()
-		nextPtr := headPtr.next.Load()
+		headPtr, tailPtr := q.head.Load(), q.tail.Load() // [1] Get current head and tail
+		nextPtr := headPtr.next.Load()                   // [2] Get head's next pointer
 
-		// Check if head is still valid.
+		// [3] Check if head is still valid.
 		if headPtr == q.head.Load() {
-			// Is queue empty or tail falling behind?
+			// [4] Is queue empty or tail falling behind?
 			if headPtr == tailPtr {
 				if nextPtr == nil {
-					// Queue is empty.
+					// [5] Queue is empty.
 					return *new(T), false
 				}
-				// Tail is falling behind, try to advance it.
+				// [6] Tail is falling behind, try to advance it.
 				q.tail.CompareAndSwap(tailPtr, nextPtr)
 			} else {
-				// Queue has at least one item.
+				// [7] Queue has at least one item.
 				if q.head.CompareAndSwap(headPtr, nextPtr) {
 					value := nextPtr.value
-					// Return old head node to free list.
+					// [8] Return old head node to free list.
 					q.returnNode(headPtr)
 					return value, true
 				}
 			}
 		}
+	}
+}
+
+// returnNode returns a node to the free list.
+func (q *Queue[T]) returnNode(node *Node[T]) {
+	for {
+		// Get current free tail.
+		freeTailPtr := q.freeTail.Load()
+
+		// Link returned node to current free tail.
+		node.next.Store(nil)
+		freeTailPtr.next.Store(node)
+
+		// Try to swing free tail to returned node.
+		if q.freeTail.CompareAndSwap(freeTailPtr, node) {
+			// Successfully linked returned node to free list.
+			return
+		}
+		// If CAS failed, try again.
 	}
 }
 
