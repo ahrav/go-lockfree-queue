@@ -199,20 +199,21 @@ func (q *Queue[T]) Enqueue(value T) {
 		}
 
 		nextPtr := tailPtr.next.Load() // [3] Get tail's next pointer
-
 		// [4] Check tail hasn't changed since we read it.
-		if tailPtr == q.tail.Load() {
-			if nextPtr == nil {
-				// [5] Tail has no next node. (we're at real tail)
-				if tailPtr.next.CompareAndSwap(nil, node) {
-					// [6] Successfully linked our node.
-					q.tail.CompareAndSwap(tailPtr, node) // [7]
-					return
-				}
-			} else {
-				// [8] Tail is lagging - help advance it.
-				q.tail.CompareAndSwap(tailPtr, nextPtr)
+		if tailPtr != q.tail.Load() {
+			continue
+		}
+
+		if nextPtr == nil {
+			// [5] Tail has no next node. (we're at real tail)
+			if tailPtr.next.CompareAndSwap(nil, node) {
+				// [6] Successfully linked our node.
+				q.tail.CompareAndSwap(tailPtr, node) // [7]
+				return
 			}
+		} else {
+			// [8] Tail is lagging - help advance it.
+			q.tail.CompareAndSwap(tailPtr, nextPtr)
 		}
 	}
 }
@@ -259,25 +260,28 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 		hp2.ptr.Store(nextPtr)         // [6] Protect next pointer from reclamation
 
 		// [7] Check if head is still valid.
-		if headPtr == q.head.Load() {
-			// [8] Is queue empty or tail falling behind?
-			if headPtr == tailPtr {
-				if nextPtr == nil {
-					// [9] Queue is empty.
-					return *new(T), false
-				}
-				// [10] Tail is falling behind, try to advance it.
-				q.tail.CompareAndSwap(tailPtr, nextPtr)
-			} else {
-				// [11] Queue has at least one item.
-				if q.head.CompareAndSwap(headPtr, nextPtr) {
-					value := nextPtr.value
-					// [12] Defer reclamation of old head.
-					q.deferReclamation(headPtr)
-					return value, true
-				}
+		if headPtr != q.head.Load() {
+			continue
+		}
+
+		// [8] Is queue empty or tail falling behind?
+		if headPtr == tailPtr {
+			if nextPtr == nil {
+				// [9] Queue is empty.
+				return *new(T), false
+			}
+			// [10] Tail is falling behind, try to advance it.
+			q.tail.CompareAndSwap(tailPtr, nextPtr)
+		} else {
+			// [11] Queue has at least one item.
+			if q.head.CompareAndSwap(headPtr, nextPtr) {
+				value := nextPtr.value
+				// [12] Defer reclamation of old head.
+				q.deferReclamation(headPtr)
+				return value, true
 			}
 		}
+
 	}
 }
 
