@@ -8,7 +8,7 @@ import (
 
 func TestQueueBasicOperations(t *testing.T) {
 	t.Run("enqueue and dequeue single value", func(t *testing.T) {
-		q := New()
+		q := New[int]()
 		defer q.Close()
 
 		// Test empty queue.
@@ -26,7 +26,7 @@ func TestQueueBasicOperations(t *testing.T) {
 	})
 
 	t.Run("FIFO order", func(t *testing.T) {
-		q := New()
+		q := New[int]()
 		defer q.Close()
 
 		values := []int{1, 2, 3, 4, 5}
@@ -45,7 +45,7 @@ func TestQueueBasicOperations(t *testing.T) {
 	})
 
 	t.Run("dequeue empty queue", func(t *testing.T) {
-		q := New()
+		q := New[int]()
 		defer q.Close()
 
 		val, ok := q.Dequeue()
