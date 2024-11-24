@@ -22,8 +22,8 @@ This implementation achieves wait-free progress for enqueue operations and lock-
 ### Data Structures
 
 1. **Node**: Represents a node in the queue.
-   - `value`: The stored value (of type `interface{}`)
-   - `next`: Pointer to the next node (using `unsafe.Pointer`)
+   - `value`: The stored value (of type `any`)
+   - `next`: Pointer to the next node (using `atomic.Pointer`)
    - `index`: Position in the pre-allocated nodes array
 
 2. **Queue**: The main queue structure.
