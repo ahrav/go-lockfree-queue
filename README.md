@@ -82,7 +82,6 @@ func main() {
 ## Limitations
 
 - Fixed maximum capacity due to pre-allocated node pool.
-- Uses unsafe pointers, which requires careful handling to avoid memory safety issues.
 - Intended for educational purposes and may not be suitable for production use without further testing and optimization.
 
 ## References
