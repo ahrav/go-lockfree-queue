@@ -31,13 +31,13 @@ import (
 
 func main() {
 	// Create a new queue.
-	q := queue.New()
+	q := queue.New[string]()
 	defer q.Close() // Remember to close to free arena memory
 
 	// Enqueue some values.
 	q.Enqueue("first")
 	q.Enqueue("second")
-	q.Enqueue(123)
+	q.Enqueue("third")
 
 	// Dequeue values (FIFO order).
 	if val, ok := q.Dequeue(); ok {
@@ -72,7 +72,7 @@ func main() {
 3. Update the head to point to the new first node.
 4. Return the value from the dequeued node and return the node to the free list.
 
-### Memory Management
+### Memory Management (EXPERIMENTAL!)
 
 - Uses Go's `arena` package for efficient memory allocation.
 - Pre-allocates a fixed number of nodes to avoid dynamic allocation during queue operations.

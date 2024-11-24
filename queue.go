@@ -10,13 +10,13 @@
 //
 //	func Example() {
 //		// Create a new queue
-//		q := queue.New()
+//		q := queue.New[string]()
 //		defer q.Close() // Remember to close to free arena memory
 //
 //		// Enqueue some values
 //		q.Enqueue("first")
 //		q.Enqueue("second")
-//		q.Enqueue(123)
+//		q.Enqueue("third")
 //
 //		// Dequeue values (FIFO order)
 //		if val, ok := q.Dequeue(); ok {
@@ -43,31 +43,31 @@ import (
 const maxNodes = 65536 // Maximum number of nodes to pre-allocate
 
 // Node represents a node in the queue.
-type Node struct {
-	value any
-	next  atomic.Pointer[Node] // *Node
-	index uint16               // Position in nodes array
+type Node[T comparable] struct {
+	value T
+	next  atomic.Pointer[Node[T]] // *Node
+	index uint16                  // Position in nodes array
 }
 
 // Queue represents a concurrent FIFO queue with pre-allocated nodes.
-type Queue struct {
-	head     atomic.Pointer[Node] // *Node
-	tail     atomic.Pointer[Node] // *Node
-	freeHead atomic.Pointer[Node] // *Node
-	freeTail atomic.Pointer[Node] // *Node
-	nodes    []Node               // Pre-allocated nodes
-	a        *arena.Arena         // Memory arena for allocation
+type Queue[T comparable] struct {
+	head     atomic.Pointer[Node[T]] // *Node
+	tail     atomic.Pointer[Node[T]] // *Node
+	freeHead atomic.Pointer[Node[T]] // *Node
+	freeTail atomic.Pointer[Node[T]] // *Node
+	nodes    []Node[T]               // Pre-allocated nodes
+	a        *arena.Arena            // Memory arena for allocation
 }
 
 // New creates a new empty queue with pre-allocated nodes.
-func New() *Queue {
+func New[T comparable]() *Queue[T] {
 	mem := arena.NewArena()
 
 	// Allocate nodes array in arena.
-	nodes := arena.MakeSlice[Node](mem, maxNodes, maxNodes)
+	nodes := arena.MakeSlice[Node[T]](mem, maxNodes, maxNodes)
 
 	// Initialize queue with a dummy node.
-	q := &Queue{nodes: nodes, a: mem}
+	q := &Queue[T]{nodes: nodes, a: mem}
 
 	// Initialize all nodes and link them in the free list.
 	for i := range nodes {
@@ -98,7 +98,7 @@ func New() *Queue {
 }
 
 // getNode gets a node from the free list.
-func (q *Queue) getNode(value any) *Node {
+func (q *Queue[T]) getNode(value T) *Node[T] {
 	for {
 		freeHeadPtr := q.freeHead.Load()
 		if freeHeadPtr == nil {
@@ -118,7 +118,7 @@ func (q *Queue) getNode(value any) *Node {
 }
 
 // returnNode returns a node to the free list.
-func (q *Queue) returnNode(node *Node) {
+func (q *Queue[T]) returnNode(node *Node[T]) {
 	for {
 		// Get current free tail.
 		freeTailPtr := q.freeTail.Load()
@@ -137,7 +137,7 @@ func (q *Queue) returnNode(node *Node) {
 }
 
 // Enqueue adds a value to the tail of the queue.
-func (q *Queue) Enqueue(value any) {
+func (q *Queue[T]) Enqueue(value T) {
 	// Get a new node from the free list
 	node := q.getNode(value)
 
@@ -163,7 +163,7 @@ func (q *Queue) Enqueue(value any) {
 }
 
 // Dequeue removes and returns a value from the head of the queue.
-func (q *Queue) Dequeue() (any, bool) {
+func (q *Queue[T]) Dequeue() (T, bool) {
 	for {
 		headPtr, tailPtr := q.head.Load(), q.tail.Load()
 		nextPtr := headPtr.next.Load()
@@ -192,7 +192,7 @@ func (q *Queue) Dequeue() (any, bool) {
 }
 
 // Empty returns true if the queue is empty.
-func (q *Queue) Empty() bool { return q.head.Load().next.Load() == nil }
+func (q *Queue[T]) Empty() bool { return q.head.Load().next.Load() == nil }
 
 // Close releases the arena memory.
-func (q *Queue) Close() { q.a.Free() }
+func (q *Queue[T]) Close() { q.a.Free() }
