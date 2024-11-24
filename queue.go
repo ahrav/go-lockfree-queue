@@ -66,7 +66,7 @@ type hazardTable[T comparable] struct{ pointers []hazardPtr[T] }
 
 func newHazardTable[T comparable](a *arena.Arena) *hazardTable[T] {
 	maxHazardPointers := 2 * runtime.GOMAXPROCS(0) * 2 // 2 pointers per thread + buffer
-	// Allocate hazard pointers from the arena
+	// Allocate hazard pointers from the arena.
 	pointers := arena.MakeSlice[hazardPtr[T]](a, maxHazardPointers, maxHazardPointers)
 	return &hazardTable[T]{pointers: pointers}
 }
