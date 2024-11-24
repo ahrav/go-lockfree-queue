@@ -48,7 +48,7 @@ type Node[T comparable] struct {
 	index uint16                  // Position in nodes array
 }
 
-// HazardPointer represents a single hazard pointer,
+// hazardPtr represents a single hazard pointer,
 // which is used to protect nodes from being reclaimed
 // while they are being accessed by concurrent operations.
 // In a lock-free queue, we need to ensure that
@@ -59,20 +59,20 @@ type Node[T comparable] struct {
 // it can only be freed if no hazard pointer is protecting it.
 // This prevents the ABA problem where a node could be freed and
 // reallocated while a thread is still trying to access it.
-type HazardPointer[T comparable] struct{ ptr atomic.Pointer[Node[T]] }
+type hazardPtr[T comparable] struct{ ptr atomic.Pointer[Node[T]] }
 
-// HazardTable manages all hazard pointers using arena memory.
-type HazardTable[T comparable] struct{ pointers []HazardPointer[T] }
+// hazardTable manages all hazard pointers using arena memory.
+type hazardTable[T comparable] struct{ pointers []hazardPtr[T] }
 
-func NewHazardTable[T comparable](a *arena.Arena) *HazardTable[T] {
+func newHazardTable[T comparable](a *arena.Arena) *hazardTable[T] {
 	maxHazardPointers := 2 * runtime.GOMAXPROCS(0) * 2 // 2 pointers per thread + buffer
 	// Allocate hazard pointers from the arena
-	pointers := arena.MakeSlice[HazardPointer[T]](a, maxHazardPointers, maxHazardPointers)
-	return &HazardTable[T]{pointers: pointers}
+	pointers := arena.MakeSlice[hazardPtr[T]](a, maxHazardPointers, maxHazardPointers)
+	return &hazardTable[T]{pointers: pointers}
 }
 
 // Acquire a free hazard pointer.
-func (ht *HazardTable[T]) Acquire() (*HazardPointer[T], int) {
+func (ht *hazardTable[T]) Acquire() (*hazardPtr[T], int) {
 	for i := range ht.pointers {
 		if ht.pointers[i].ptr.Load() == nil {
 			return &ht.pointers[i], i
@@ -82,9 +82,9 @@ func (ht *HazardTable[T]) Acquire() (*HazardPointer[T], int) {
 }
 
 // Release a hazard pointer.
-func (ht *HazardTable[T]) Release(index int) { ht.pointers[index].ptr.Store(nil) }
+func (ht *hazardTable[T]) Release(index int) { ht.pointers[index].ptr.Store(nil) }
 
-// ReclamationStack is a lock-free stack for retired nodes that need to be safely reclaimed.
+// reclamationStack is a lock-free stack for retired nodes that need to be safely reclaimed.
 // We need this structure because in a lock-free queue, we can't immediately free nodes
 // when they're removed - other threads might still be accessing them.
 // Instead, we temporarily store "retired" nodes here until we're sure no threads are accessing them
@@ -94,10 +94,10 @@ func (ht *HazardTable[T]) Release(index int) { ht.pointers[index].ptr.Store(nil)
 // cause thread contention.
 // This is crucial for maintaining the lock-free property of
 // the overall queue implementation.
-type ReclamationStack[T comparable] struct{ head atomic.Pointer[Node[T]] }
+type reclamationStack[T comparable] struct{ head atomic.Pointer[Node[T]] }
 
 // Push a node to the reclamation stack.
-func (s *ReclamationStack[T]) Push(node *Node[T]) {
+func (s *reclamationStack[T]) Push(node *Node[T]) {
 	for {
 		oldHead := s.head.Load()
 		node.next.Store(oldHead)
@@ -108,7 +108,7 @@ func (s *ReclamationStack[T]) Push(node *Node[T]) {
 }
 
 // Pop a node from the reclamation stack.
-func (s *ReclamationStack[T]) Pop() *Node[T] {
+func (s *reclamationStack[T]) Pop() *Node[T] {
 	for {
 		oldHead := s.head.Load()
 		if oldHead == nil {
@@ -129,8 +129,8 @@ type Queue[T comparable] struct {
 	freeTail atomic.Pointer[Node[T]] // *Node
 	nodes    []Node[T]               // Pre-allocated nodes
 
-	hazard  *HazardTable[T]     // Hazard pointers table
-	reclaim ReclamationStack[T] // Reclamation stack
+	hazard  *hazardTable[T]     // Hazard pointers table
+	reclaim reclamationStack[T] // Reclamation stack
 
 	a *arena.Arena // Arena memory
 }
@@ -147,8 +147,8 @@ func New[T comparable]() *Queue[T] {
 	// Initialize queue with a dummy node.
 	q := &Queue[T]{
 		nodes:   nodes,
-		hazard:  NewHazardTable[T](mem),
-		reclaim: ReclamationStack[T]{},
+		hazard:  newHazardTable[T](mem),
+		reclaim: reclamationStack[T]{},
 		a:       mem,
 	}
 
@@ -300,7 +300,7 @@ func (q *Queue[T]) reclaimRoutine() {
 // Finally, it pushes the nodes from the temporary list back
 // onto the main reclamation stack.
 func (q *Queue[T]) cleanupReclaimedNodes() {
-	reclaimList := ReclamationStack[T]{} // Temporary stack for nodes we can't reclaim yet
+	reclaimList := reclamationStack[T]{} // Temporary stack for nodes we can't reclaim yet
 
 	// Try to reclaim each node in the reclamation stack.
 	for {
