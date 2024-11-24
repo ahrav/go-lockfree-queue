@@ -42,7 +42,7 @@ import (
 )
 
 // Node represents a node in the queue.
-type Node[T comparable] struct {
+type Node[T any] struct {
 	value T
 	next  atomic.Pointer[Node[T]] // *Node
 	index uint16                  // Position in nodes array
@@ -59,12 +59,12 @@ type Node[T comparable] struct {
 // it can only be freed if no hazard pointer is protecting it.
 // This prevents the ABA problem where a node could be freed and
 // reallocated while a thread is still trying to access it.
-type hazardPtr[T comparable] struct{ ptr atomic.Pointer[Node[T]] }
+type hazardPtr[T any] struct{ ptr atomic.Pointer[Node[T]] }
 
 // hazardTable manages all hazard pointers using arena memory.
-type hazardTable[T comparable] struct{ pointers []hazardPtr[T] }
+type hazardTable[T any] struct{ pointers []hazardPtr[T] }
 
-func newHazardTable[T comparable](a *arena.Arena) *hazardTable[T] {
+func newHazardTable[T any](a *arena.Arena) *hazardTable[T] {
 	maxHazardPointers := 2 * runtime.GOMAXPROCS(0) * 2 // 2 pointers per thread + buffer
 	// Allocate hazard pointers from the arena.
 	pointers := arena.MakeSlice[hazardPtr[T]](a, maxHazardPointers, maxHazardPointers)
@@ -94,7 +94,7 @@ func (ht *hazardTable[T]) Release(index int) { ht.pointers[index].ptr.Store(nil)
 // cause thread contention.
 // This is crucial for maintaining the lock-free property of
 // the overall queue implementation.
-type reclamationStack[T comparable] struct{ head atomic.Pointer[Node[T]] }
+type reclamationStack[T any] struct{ head atomic.Pointer[Node[T]] }
 
 // Push a node to the reclamation stack.
 func (s *reclamationStack[T]) Push(node *Node[T]) {
@@ -114,15 +114,14 @@ func (s *reclamationStack[T]) Pop() *Node[T] {
 		if oldHead == nil {
 			return nil
 		}
-		next := oldHead.next.Load()
-		if s.head.CompareAndSwap(oldHead, next) {
+		if s.head.CompareAndSwap(oldHead, oldHead.next.Load()) {
 			return oldHead
 		}
 	}
 }
 
 // Queue represents a concurrent FIFO queue with pre-allocated nodes.
-type Queue[T comparable] struct {
+type Queue[T any] struct {
 	head     atomic.Pointer[Node[T]] // *Node
 	tail     atomic.Pointer[Node[T]] // *Node
 	freeHead atomic.Pointer[Node[T]] // *Node
@@ -136,7 +135,7 @@ type Queue[T comparable] struct {
 }
 
 // New creates a new empty queue with pre-allocated nodes.
-func New[T comparable]() *Queue[T] {
+func New[T any]() *Queue[T] {
 	const maxNodes = 1 << 16 // Maximum number of nodes to pre-allocate
 
 	mem := arena.NewArena()
