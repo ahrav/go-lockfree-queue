@@ -50,6 +50,6 @@ func TestQueueBasicOperations(t *testing.T) {
 
 		val, ok := q.Dequeue()
 		assert.False(t, ok, "dequeue on empty queue should return false")
-		assert.Nil(t, val, "dequeue on empty queue should return nil")
+		assert.Zero(t, val, "dequeue on empty queue should return zero value")
 	})
 }

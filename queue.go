@@ -174,7 +174,7 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 			if headPtr == tailPtr {
 				if nextPtr == nil {
 					// Queue is empty.
-					return nil, false
+					return *new(T), false
 				}
 				// Tail is falling behind, try to advance it.
 				q.tail.CompareAndSwap(tailPtr, nextPtr)
