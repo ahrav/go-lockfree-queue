@@ -37,16 +37,100 @@ package queue
 
 import (
 	"arena"
+	"runtime"
 	"sync/atomic"
 )
 
-const maxNodes = 65536 // Maximum number of nodes to pre-allocate
+const (
+	maxNodes          = 65536 // Maximum number of nodes to pre-allocate
+	maxHazardPointers = 2048  // Maximum number of hazard pointers
+)
 
 // Node represents a node in the queue.
 type Node[T comparable] struct {
 	value T
 	next  atomic.Pointer[Node[T]] // *Node
 	index uint16                  // Position in nodes array
+}
+
+// HazardPointer represents a single hazard pointer,
+// which is used to protect nodes from being reclaimed
+// while they are being accessed by concurrent operations.
+// In a lock-free queue, we need to ensure that
+// nodes are not freed while other threads may still be reading from them.
+// Hazard pointers provide this safety by having each thread declare which
+// nodes it is currently accessing.
+// When a node is removed from the queue,
+// it can only be freed if no hazard pointer is protecting it.
+// This prevents the ABA problem where a node could be freed and
+// reallocated while a thread is still trying to access it.
+type HazardPointer[T comparable] struct {
+	ptr atomic.Pointer[Node[T]]
+}
+
+// HazardTable manages all hazard pointers using arena memory.
+type HazardTable[T comparable] struct {
+	pointers []HazardPointer[T]
+}
+
+func NewHazardTable[T comparable](a *arena.Arena) *HazardTable[T] {
+	// Allocate hazard pointers from the arena
+	pointers := arena.MakeSlice[HazardPointer[T]](a, maxHazardPointers, maxHazardPointers)
+	return &HazardTable[T]{pointers: pointers}
+}
+
+// Acquire a free hazard pointer.
+func (ht *HazardTable[T]) Acquire() (*HazardPointer[T], int) {
+	for i := range ht.pointers {
+		if ht.pointers[i].ptr.Load() == nil {
+			return &ht.pointers[i], i
+		}
+	}
+	panic("no free hazard pointers")
+}
+
+// Release a hazard pointer.
+func (ht *HazardTable[T]) Release(index int) {
+	ht.pointers[index].ptr.Store(nil)
+}
+
+// ReclamationStack is a lock-free stack for retired nodes that need to be safely reclaimed.
+// We need this structure because in a lock-free queue, we can't immediately free nodes
+// when they're removed - other threads might still be accessing them.
+// Instead, we temporarily store "retired" nodes here until we're sure no threads are accessing them
+// (verified via hazard pointers).
+// Using a lock-free stack ensures that the memory
+// reclamation process itself doesn't become a bottleneck by avoiding locks that could
+// cause thread contention.
+// This is crucial for maintaining the lock-free property of
+// the overall queue implementation.
+type ReclamationStack[T comparable] struct {
+	head atomic.Pointer[Node[T]]
+}
+
+// Push a node to the reclamation stack.
+func (s *ReclamationStack[T]) Push(node *Node[T]) {
+	for {
+		oldHead := s.head.Load()
+		node.next.Store(oldHead)
+		if s.head.CompareAndSwap(oldHead, node) {
+			return
+		}
+	}
+}
+
+// Pop a node from the reclamation stack.
+func (s *ReclamationStack[T]) Pop() *Node[T] {
+	for {
+		oldHead := s.head.Load()
+		if oldHead == nil {
+			return nil
+		}
+		next := oldHead.next.Load()
+		if s.head.CompareAndSwap(oldHead, next) {
+			return oldHead
+		}
+	}
 }
 
 // Queue represents a concurrent FIFO queue with pre-allocated nodes.
@@ -56,7 +140,9 @@ type Queue[T comparable] struct {
 	freeHead atomic.Pointer[Node[T]] // *Node
 	freeTail atomic.Pointer[Node[T]] // *Node
 	nodes    []Node[T]               // Pre-allocated nodes
-	a        *arena.Arena            // Memory arena for allocation
+	hazard   *HazardTable[T]         // Hazard pointers table
+	reclaim  ReclamationStack[T]     // Reclamation stack
+	a        *arena.Arena            // Arena memory
 }
 
 // New creates a new empty queue with pre-allocated nodes.
@@ -67,7 +153,12 @@ func New[T comparable]() *Queue[T] {
 	nodes := arena.MakeSlice[Node[T]](mem, maxNodes, maxNodes)
 
 	// Initialize queue with a dummy node.
-	q := &Queue[T]{nodes: nodes, a: mem}
+	q := &Queue[T]{
+		nodes:   nodes,
+		hazard:  NewHazardTable[T](mem),
+		reclaim: ReclamationStack[T]{},
+		a:       mem,
+	}
 
 	// Initialize all nodes and link them in the free list.
 	for i := range nodes {
@@ -94,7 +185,44 @@ func New[T comparable]() *Queue[T] {
 		nodes[i].next.Store(&nodes[i+1])
 	}
 
+	// Start reclamation routine.
+	go q.reclaimRoutine()
+
 	return q
+}
+
+// Enqueue adds a value to the tail of the queue.
+func (q *Queue[T]) Enqueue(value T) {
+	// Get a new node from the free list
+	node := q.getNode(value)
+	hp, hpIdx := q.hazard.Acquire()
+	defer q.hazard.Release(hpIdx)
+
+	for {
+		tailPtr := q.tail.Load() // [1] Get current tail
+		hp.ptr.Store(tailPtr)    // [2] Protect tail from reclamation
+
+		if tailPtr != q.tail.Load() {
+			continue
+		}
+
+		nextPtr := tailPtr.next.Load() // [3] Get tail's next pointer
+
+		// [4] Check tail hasn't changed since we read it.
+		if tailPtr == q.tail.Load() {
+			if nextPtr == nil {
+				// [5] Tail has no next node. (we're at real tail)
+				if tailPtr.next.CompareAndSwap(nil, node) {
+					// [6] Successfully linked our node.
+					q.tail.CompareAndSwap(tailPtr, node) // [7]
+					return
+				}
+			} else {
+				// [8] Tail is lagging - help advance it.
+				q.tail.CompareAndSwap(tailPtr, nextPtr)
+			}
+		}
+	}
 }
 
 // getNode gets a node from the free list.
@@ -117,53 +245,42 @@ func (q *Queue[T]) getNode(value T) *Node[T] {
 	}
 }
 
-// Enqueue adds a value to the tail of the queue.
-func (q *Queue[T]) Enqueue(value T) {
-	// Get a new node from the free list
-	node := q.getNode(value)
-
-	for {
-		tailPtr := q.tail.Load()       // [1] Get current tail
-		nextPtr := tailPtr.next.Load() // [2] Get tail's next pointer
-
-		// [3] Check tail hasn't changed since we read it.
-		if tailPtr == q.tail.Load() {
-			if nextPtr == nil {
-				// [4] Tail has no next node. (we're at real tail)
-				if tailPtr.next.CompareAndSwap(nil, node) {
-					// [5] Successfully linked our node.
-					q.tail.CompareAndSwap(tailPtr, node) // [6]
-					return
-				}
-			} else {
-				// [7] Tail is lagging - help advance it.
-				q.tail.CompareAndSwap(tailPtr, nextPtr)
-			}
-		}
-	}
-}
-
 // Dequeue removes and returns a value from the head of the queue.
 func (q *Queue[T]) Dequeue() (T, bool) {
-	for {
-		headPtr, tailPtr := q.head.Load(), q.tail.Load() // [1] Get current head and tail
-		nextPtr := headPtr.next.Load()                   // [2] Get head's next pointer
+	hp1, hpIdx1 := q.hazard.Acquire()
+	hp2, hpIdx2 := q.hazard.Acquire()
+	defer func() {
+		q.hazard.Release(hpIdx1)
+		q.hazard.Release(hpIdx2)
+	}()
 
-		// [3] Check if head is still valid.
+	for {
+		headPtr := q.head.Load() // [1] Get current head
+		hp1.ptr.Store(headPtr)   // [2] Protect head from reclamation
+
+		if headPtr != q.head.Load() {
+			continue
+		}
+
+		tailPtr := q.tail.Load()       // [4] Get current tail
+		nextPtr := headPtr.next.Load() // [5] Get head's next pointer
+		hp2.ptr.Store(nextPtr)         // [6] Protect next pointer from reclamation
+
+		// [7] Check if head is still valid.
 		if headPtr == q.head.Load() {
-			// [4] Is queue empty or tail falling behind?
+			// [8] Is queue empty or tail falling behind?
 			if headPtr == tailPtr {
 				if nextPtr == nil {
-					// [5] Queue is empty.
+					// [9] Queue is empty.
 					return *new(T), false
 				}
-				// [6] Tail is falling behind, try to advance it.
+				// [10] Tail is falling behind, try to advance it.
 				q.tail.CompareAndSwap(tailPtr, nextPtr)
 			} else {
-				// [7] Queue has at least one item.
+				// [11] Queue has at least one item.
 				if q.head.CompareAndSwap(headPtr, nextPtr) {
 					value := nextPtr.value
-					// [8] Return old head node to free list.
+					// [12] Return old head node to free list.
 					q.returnNode(headPtr)
 					return value, true
 				}
@@ -189,6 +306,51 @@ func (q *Queue[T]) returnNode(node *Node[T]) {
 		}
 		// If CAS failed, try again.
 	}
+}
+
+func (q *Queue[T]) deferReclamation(node *Node[T]) { q.reclaim.Push(node) }
+
+func (q *Queue[T]) reclaimRoutine() {
+	for {
+		q.cleanupReclaimedNodes()
+		runtime.Gosched() // Give other goroutines a chance
+	}
+}
+
+func (q *Queue[T]) cleanupReclaimedNodes() {
+	reclaimList := ReclamationStack[T]{} // Temporary stack for nodes we can't reclaim yet
+
+	// Try to reclaim each node in the reclamation stack.
+	for {
+		node := q.reclaim.Pop()
+		if node == nil {
+			break
+		}
+
+		if !q.isNodeHazardous(node) {
+			q.returnNode(node) // Safe to reclaim
+		} else {
+			reclaimList.Push(node) // Still hazardous, save for later
+		}
+	}
+
+	// Push back nodes we couldn't reclaim.
+	for {
+		node := reclaimList.Pop()
+		if node == nil {
+			break
+		}
+		q.reclaim.Push(node)
+	}
+}
+
+func (q *Queue[T]) isNodeHazardous(node *Node[T]) bool {
+	for i := range q.hazard.pointers {
+		if q.hazard.pointers[i].ptr.Load() == node {
+			return true
+		}
+	}
+	return false
 }
 
 // Empty returns true if the queue is empty.

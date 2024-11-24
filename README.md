@@ -14,7 +14,7 @@ This implementation achieves wait-free progress for enqueue operations and lock-
 ### Key Features
 
 1. **Lock-Free Operations**: Both enqueue and dequeue operations are implemented without using locks, allowing for high concurrency.
-2. **ABA Problem Mitigation**: Instead of using counters as suggested in the original paper, this implementation uses Go's unsafe pointers as a workaround for the ABA problem.
+2. **ABA Problem Mitigation**: Instead of using counters as suggested in the original paper, this implementation uses hazard pointers as a workaround for the ABA problem.
 3. **Memory Management**: Utilizes Go's memory arenas to manage the free list, optimizing memory allocation and deallocation. (Maybe?)
 
 ### Example Usage
