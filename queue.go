@@ -1,3 +1,38 @@
+// Package queue implements a lock-free concurrent FIFO queue using pre-allocated nodes
+// in a memory arena. The queue is designed for high-performance concurrent access
+// without locks, making it suitable for multi-producer, multi-consumer scenarios.
+//
+// The queue pre-allocates a fixed number of nodes (65536 by default) in a memory arena
+// for better memory locality and reduced allocation overhead. When the queue is full,
+// attempting to enqueue will panic.
+//
+// Example usage:
+//
+//	func Example() {
+//		// Create a new queue
+//		q := queue.New()
+//		defer q.Close() // Remember to close to free arena memory
+//
+//		// Enqueue some values
+//		q.Enqueue("first")
+//		q.Enqueue("second")
+//		q.Enqueue(123)
+//
+//		// Dequeue values (FIFO order)
+//		if val, ok := q.Dequeue(); ok {
+//			fmt.Println(val) // Prints: first
+//		}
+//
+//		if val, ok := q.Dequeue(); ok {
+//			fmt.Println(val) // Prints: second
+//		}
+//
+//		// Check if queue is empty
+//		if !q.Empty() {
+//			val, _ := q.Dequeue()
+//			fmt.Println(val) // Prints: 123
+//		}
+//	}
 package queue
 
 import (
