@@ -291,6 +291,11 @@ func (q *Queue[T]) reclaimRoutine() {
 	}
 }
 
+// cleanupReclaimedNodes attempts to reclaim nodes from the reclamation stack.
+// It first tries to reclaim each node that is not currently in use (hazardous),
+// and pushes any nodes that are still in use back onto a temporary reclaim list.
+// Finally, it pushes the nodes from the temporary list back
+// onto the main reclamation stack.
 func (q *Queue[T]) cleanupReclaimedNodes() {
 	reclaimList := ReclamationStack[T]{} // Temporary stack for nodes we can't reclaim yet
 
