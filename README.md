@@ -85,10 +85,6 @@ func main() {
 - Uses unsafe pointers, which requires careful handling to avoid memory safety issues.
 - Intended for educational purposes and may not be suitable for production use without further testing and optimization.
 
-## Usage
-
-TODO
-
 ## References
 
 - Michael, M. M., & Scott, M. L. (1996). Simple, fast, and practical non-blocking and blocking concurrent queue algorithms. In Proceedings of the fifteenth annual ACM symposium on Principles of distributed computing (pp. 267-275).
