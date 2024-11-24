@@ -158,7 +158,6 @@ func New[T comparable]() *Queue[T] {
 		nodes[i].next.Store(nil)
 	}
 
-	// Setup initial dummy node.
 	dummyNode := &nodes[0]
 
 	// Setup head and tail to point to dummy node.
@@ -177,16 +176,16 @@ func New[T comparable]() *Queue[T] {
 		nodes[i].next.Store(&nodes[i+1])
 	}
 
-	// Start reclamation routine.
-	go q.reclaimRoutine()
+	go q.reclaimRoutine() // Background goroutine to clean up reclaimed nodes
 
 	return q
 }
 
 // Enqueue adds a value to the tail of the queue.
 func (q *Queue[T]) Enqueue(value T) {
-	// Get a new node from the free list
+	// Get a new node from the free list.
 	node := q.getNode(value)
+
 	hp, hpIdx := q.hazard.Acquire()
 	defer q.hazard.Release(hpIdx)
 
@@ -218,7 +217,8 @@ func (q *Queue[T]) Enqueue(value T) {
 	}
 }
 
-// getNode gets a node from the free list.
+// getNode from free list.
+// These nodes are hazard-free, so we can use them immediately.
 func (q *Queue[T]) getNode(value T) *Node[T] {
 	for {
 		freeHeadPtr := q.freeHead.Load()
