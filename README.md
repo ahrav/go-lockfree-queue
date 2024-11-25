@@ -19,40 +19,30 @@ This implementation achieves wait-free progress for enqueue operations and lock-
 ### Example Usage
 
 The following example demonstrates how to use the `go-lockfree-queue` library to create a queue and perform basic enqueue and dequeue operations:
-
 ```go
-package main
+// Default configuration.
+q1 := queue.New[string]()
 
-import (
-	"fmt"
-	"github.com/ahrav/go-lockfree-queue"
+// Custom configuration.
+q2 := queue.New[string](
+    queue.WithMaxNodes(1<<20),              // 1 million nodes
+    queue.WithReclaimInterval(100 * time.Millisecond), // More frequent reclamation
 )
-
-func main() {
-	// Create a new queue.
-	q := queue.New[string]()
-
-	// Enqueue some values.
-	q.Enqueue("first")
-	q.Enqueue("second")
-	q.Enqueue("third")
-
-	// Dequeue values (FIFO order).
-	if val, ok := q.Dequeue(); ok {
-		fmt.Println(val) // Prints: first
-	}
-
-	if val, ok := q.Dequeue(); ok {
-		fmt.Println(val) // Prints: second
-	}
-
-	// Check if queue is empty.
-	if !q.Empty() {
-		val, _ := q.Dequeue()
-		fmt.Println(val) // Prints: 123
-	}
-}
 ```
+
+#### Available Options
+
+1. **WithMaxNodes(n int)**: Sets the maximum number of nodes in the queue.
+   - Default: 65,536 (1<<16) nodes
+   - Use when: You need to handle more concurrent items or want to reduce memory usage
+   - Example: `queue.WithMaxNodes(1<<20)` for 1 million nodes
+
+2. **WithReclaimInterval(d time.Duration)**: Sets how often the queue attempts to reclaim nodes.
+   - Default: 5 seconds
+   - Use when:
+     - High throughput: Decrease interval to reclaim nodes more frequently
+     - Low throughput: Increase interval to reduce CPU overhead
+   - Example: `queue.WithReclaimInterval(100 * time.Millisecond)` for high-throughput scenarios
 
 
 ### Key Operations

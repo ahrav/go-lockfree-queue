@@ -53,7 +53,7 @@ func TestQueueBasicOperations(t *testing.T) {
 }
 
 func BenchmarkEnqueueDequeueSequential(b *testing.B) {
-	q := New[int]()
+	q := New[int](WithMaxNodes[int](1 << 25))
 
 	b.ResetTimer()
 	for i := range b.N {
@@ -63,26 +63,19 @@ func BenchmarkEnqueueDequeueSequential(b *testing.B) {
 }
 
 func BenchmarkEnqueueDequeueParallel(b *testing.B) {
-	q := New[int]()
-
-	var wg sync.WaitGroup
+	q := New[int](WithMaxNodes[int](1 << 25))
 
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				q.Enqueue(1)
-				_, _ = q.Dequeue()
-			}()
+			q.Enqueue(1)
+			_, _ = q.Dequeue()
 		}
 	})
-	wg.Wait()
 }
 
 func BenchmarkProducerConsumer(b *testing.B) {
-	q := New[int]()
+	q := New[int](WithMaxNodes[int](1 << 25))
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -102,6 +95,35 @@ func BenchmarkProducerConsumer(b *testing.B) {
 			_, _ = q.Dequeue()
 		}
 	}()
+
+	wg.Wait()
+}
+
+func BenchmarkMultipleProducersConsumers(b *testing.B) {
+	q := New[int](WithMaxNodes[int](1 << 25))
+
+	var wg sync.WaitGroup
+	wg.Add(10)
+
+	b.ResetTimer()
+
+	for i := range 5 {
+		go func(i int) {
+			defer wg.Done()
+			for range b.N {
+				q.Enqueue(i)
+			}
+		}(i)
+	}
+
+	for i := range 5 {
+		go func(i int) {
+			defer wg.Done()
+			for range b.N {
+				_, _ = q.Dequeue()
+			}
+		}(i)
+	}
 
 	wg.Wait()
 }

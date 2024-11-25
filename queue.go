@@ -9,27 +9,28 @@
 // Example usage:
 //
 //	func Example() {
-//		// Create a new queue
-//		q := queue.New[string]()
+//		// Create a queue with default options
+//		q1 := queue.New[string]()
+//		defer q1.Close()
 //
-//		// Enqueue some values
-//		q.Enqueue("first")
-//		q.Enqueue("second")
-//		q.Enqueue("third")
+//		// Create a queue with custom options
+//		q2 := queue.New[string](
+//			queue.WithMaxNodes(1<<20),              // Set max nodes to 1 million
+//			queue.WithReclaimInterval(time.Second), // Reclaim nodes every second
+//		)
+//		defer q2.Close()
 //
-//		// Dequeue values (FIFO order)
-//		if val, ok := q.Dequeue(); ok {
+//		// Basic operations remain the same
+//		q2.Enqueue("first")
+//		q2.Enqueue("second")
+//
+//		if val, ok := q2.Dequeue(); ok {
 //			fmt.Println(val) // Prints: first
 //		}
 //
-//		if val, ok := q.Dequeue(); ok {
+//		if !q2.Empty() {
+//			val, _ := q2.Dequeue()
 //			fmt.Println(val) // Prints: second
-//		}
-//
-//		// Check if queue is empty
-//		if !q.Empty() {
-//			val, _ := q.Dequeue()
-//			fmt.Println(val) // Prints: 123
 //		}
 //	}
 package queue
@@ -127,43 +128,64 @@ type Queue[T any] struct {
 
 	hazard  *hazardTable[T]     // Hazard pointers table
 	reclaim reclamationStack[T] // Reclamation stack
+
+	reclaimInterval time.Duration // Interval between reclamation runs
+}
+
+// QueueOption is a functional option for configuring a Queue.
+type QueueOption[T any] func(*Queue[T])
+
+// WithMaxNodes sets the maximum number of pre-allocated nodes.
+func WithMaxNodes[T any](maxNodes int) QueueOption[T] {
+	return func(q *Queue[T]) { q.nodes = make([]Node[T], maxNodes) }
+}
+
+// WithReclaimInterval sets the interval between reclamation runs.
+func WithReclaimInterval[T any](interval time.Duration) QueueOption[T] {
+	return func(q *Queue[T]) { q.reclaimInterval = interval }
 }
 
 // New creates a new empty queue with pre-allocated nodes.
-func New[T any]() *Queue[T] {
-	const maxNodes = 1 << 20 // Maximum number of nodes to pre-allocate
+func New[T any](opts ...QueueOption[T]) *Queue[T] {
+	const (
+		defaultMaxNodes = 1 << 16
+		defaultInterval = 5 * time.Second
+	)
 
-	nodes := make([]Node[T], maxNodes)
-
-	// Initialize queue with a dummy node.
+	// Initialize queue with defaults.
 	q := &Queue[T]{
-		nodes:   nodes,
-		hazard:  newHazardTable[T](),
-		reclaim: reclamationStack[T]{},
+		nodes:           make([]Node[T], defaultMaxNodes),
+		hazard:          newHazardTable[T](),
+		reclaim:         reclamationStack[T]{},
+		reclaimInterval: defaultInterval,
+	}
+
+	for _, opt := range opts {
+		opt(q)
 	}
 
 	// Initialize all nodes and link them in the free list.
-	for i := range nodes {
-		nodes[i].index = uint16(i)
-		nodes[i].next.Store(nil)
+	for i := range q.nodes {
+		q.nodes[i].index = uint16(i)
+		q.nodes[i].next.Store(nil)
 	}
 
-	dummyNode := &nodes[0]
+	dummyNode := &q.nodes[0]
 
 	// Setup head and tail to point to dummy node.
 	q.head.Store(dummyNode)
 	q.tail.Store(dummyNode)
 
 	// Setup free list - link all nodes except dummy.
-	firstFreeNode := &nodes[1]
-	lastFreeNode := &nodes[maxNodes-1]
+	firstFreeNode := &q.nodes[1]
+	lastFreeNode := &q.nodes[len(q.nodes)-1]
 
 	q.freeHead.Store(firstFreeNode)
 	q.freeTail.Store(lastFreeNode)
 
 	// Link all free nodes together.
-	for i := 1; i < maxNodes-1; i++ {
-		nodes[i].next.Store(&nodes[i+1])
+	for i := 1; i < len(q.nodes)-1; i++ {
+		q.nodes[i].next.Store(&q.nodes[i+1])
 	}
 
 	go q.reclaimRoutine() // Background goroutine to clean up reclaimed nodes
@@ -278,15 +300,12 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 func (q *Queue[T]) deferReclamation(node *Node[T]) { q.reclaim.Push(node) }
 
 func (q *Queue[T]) reclaimRoutine() {
-	// TODO: This should be configurable. Currently a higher value cause the benchmarks to panic
-	const defaultInterval = 100 * time.Microsecond
-	ticker := time.NewTicker(defaultInterval)
+	ticker := time.NewTicker(q.reclaimInterval)
 	defer ticker.Stop()
 
 	for {
 		<-ticker.C
 		q.cleanupReclaimedNodes()
-		// runtime.Gosched() // Give other goroutines a chance
 	}
 }
 
