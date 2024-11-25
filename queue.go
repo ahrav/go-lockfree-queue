@@ -37,6 +37,7 @@ package queue
 
 import (
 	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -45,7 +46,6 @@ import (
 type Node[T any] struct {
 	value T
 	next  atomic.Pointer[Node[T]] // *Node
-	index uint16                  // Position in nodes array
 }
 
 // hazardPtr represents a single hazard pointer,
@@ -120,11 +120,11 @@ func (s *reclamationStack[T]) Pop() *Node[T] {
 
 // Queue represents a concurrent FIFO queue with pre-allocated nodes.
 type Queue[T any] struct {
-	head     atomic.Pointer[Node[T]] // *Node
-	tail     atomic.Pointer[Node[T]] // *Node
-	freeHead atomic.Pointer[Node[T]] // *Node
-	freeTail atomic.Pointer[Node[T]] // *Node
-	nodes    []Node[T]               // Pre-allocated nodes
+	head atomic.Pointer[Node[T]] // *Node
+	tail atomic.Pointer[Node[T]] // *Node
+
+	nodeCount int       // Number of nodes in the pool
+	nodePool  sync.Pool // Pool of free nodes
 
 	hazard  *hazardTable[T]     // Hazard pointers table
 	reclaim reclamationStack[T] // Reclamation stack
@@ -134,11 +134,6 @@ type Queue[T any] struct {
 
 // QueueOption is a functional option for configuring a Queue.
 type QueueOption[T any] func(*Queue[T])
-
-// WithMaxNodes sets the maximum number of pre-allocated nodes.
-func WithMaxNodes[T any](maxNodes int) QueueOption[T] {
-	return func(q *Queue[T]) { q.nodes = make([]Node[T], maxNodes) }
-}
 
 // WithReclaimInterval sets the interval between reclamation runs.
 func WithReclaimInterval[T any](interval time.Duration) QueueOption[T] {
@@ -154,39 +149,28 @@ func New[T any](opts ...QueueOption[T]) *Queue[T] {
 
 	// Initialize queue with defaults.
 	q := &Queue[T]{
-		nodes:           make([]Node[T], defaultMaxNodes),
+		nodeCount:       defaultMaxNodes,
 		hazard:          newHazardTable[T](),
 		reclaim:         reclamationStack[T]{},
 		reclaimInterval: defaultInterval,
+		nodePool: sync.Pool{
+			New: func() any { return &Node[T]{} },
+		},
 	}
 
 	for _, opt := range opts {
 		opt(q)
 	}
 
-	// Initialize all nodes and link them in the free list.
-	for i := range q.nodes {
-		q.nodes[i].index = uint16(i)
-		q.nodes[i].next.Store(nil)
+	// Initialize all nodes and add them to pool.
+	for range q.nodeCount {
+		q.nodePool.Put(&Node[T]{})
 	}
 
-	dummyNode := &q.nodes[0]
-
-	// Setup head and tail to point to dummy node.
+	// Setup head and tail with dummy node.
+	dummyNode := q.nodePool.Get().(*Node[T])
 	q.head.Store(dummyNode)
 	q.tail.Store(dummyNode)
-
-	// Setup free list - link all nodes except dummy.
-	firstFreeNode := &q.nodes[1]
-	lastFreeNode := &q.nodes[len(q.nodes)-1]
-
-	q.freeHead.Store(firstFreeNode)
-	q.freeTail.Store(lastFreeNode)
-
-	// Link all free nodes together.
-	for i := 1; i < len(q.nodes)-1; i++ {
-		q.nodes[i].next.Store(&q.nodes[i+1])
-	}
 
 	go q.reclaimRoutine() // Background goroutine to clean up reclaimed nodes
 
@@ -195,7 +179,6 @@ func New[T any](opts ...QueueOption[T]) *Queue[T] {
 
 // Enqueue adds a value to the tail of the queue.
 func (q *Queue[T]) Enqueue(value T) {
-	// Get a new node from the free list.
 	node := q.getNode(value)
 
 	hp, hpIdx := q.hazard.Acquire()
@@ -229,25 +212,12 @@ func (q *Queue[T]) Enqueue(value T) {
 	}
 }
 
-// getNode from free list.
-// These nodes are hazard-free, so we can use them immediately.
+// getNode from pool.
 func (q *Queue[T]) getNode(value T) *Node[T] {
-	for {
-		freeHeadPtr := q.freeHead.Load()
-		if freeHeadPtr == nil {
-			panic("out of nodes") // Free list is empty
-		}
-
-		nextFreePtr := freeHeadPtr.next.Load()
-		if q.freeHead.CompareAndSwap(freeHeadPtr, nextFreePtr) {
-			// This node is exclusively ours.
-			// It can't be accessed by other threads until it's linked to the queue.
-			freeHeadPtr.value = value
-			freeHeadPtr.next.Store(nil)
-			return freeHeadPtr
-		}
-		// If CAS failed, try again.
-	}
+	node := q.nodePool.Get().(*Node[T])
+	node.value = value
+	node.next.Store(nil)
+	return node
 }
 
 // Dequeue removes and returns a value from the head of the queue.
@@ -293,7 +263,6 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 				return value, true
 			}
 		}
-
 	}
 }
 
@@ -350,23 +319,10 @@ func (q *Queue[T]) isNodeHazardous(node *Node[T]) bool {
 	return false
 }
 
-// returnNode returns a node to the free list.
+// returnNode returns a node to the pool.
 func (q *Queue[T]) returnNode(node *Node[T]) {
-	for {
-		// Get current free tail.
-		freeTailPtr := q.freeTail.Load()
-
-		// Link returned node to current free tail.
-		node.next.Store(nil)
-		freeTailPtr.next.Store(node)
-
-		// Try to swing free tail to returned node.
-		if q.freeTail.CompareAndSwap(freeTailPtr, node) {
-			// Successfully linked returned node to free list.
-			return
-		}
-		// If CAS failed, try again.
-	}
+	node.next.Store(nil)
+	q.nodePool.Put(node)
 }
 
 // Empty returns true if the queue is empty.

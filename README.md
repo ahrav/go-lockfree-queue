@@ -25,19 +25,13 @@ q1 := queue.New[string]()
 
 // Custom configuration.
 q2 := queue.New[string](
-    queue.WithMaxNodes(1<<20),              // 1 million nodes
     queue.WithReclaimInterval(100 * time.Millisecond), // More frequent reclamation
 )
 ```
 
 #### Available Options
 
-1. **WithMaxNodes(n int)**: Sets the maximum number of nodes in the queue.
-   - Default: 65,536 (1<<16) nodes
-   - Use when: You need to handle more concurrent items or want to reduce memory usage
-   - Example: `queue.WithMaxNodes(1<<20)` for 1 million nodes
-
-2. **WithReclaimInterval(d time.Duration)**: Sets how often the queue attempts to reclaim nodes.
+1. **WithReclaimInterval(d time.Duration)**: Sets how often the queue attempts to reclaim nodes.
    - Default: 5 seconds
    - Use when:
      - High throughput: Decrease interval to reclaim nodes more frequently
