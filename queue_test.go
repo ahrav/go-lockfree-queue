@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,4 +53,61 @@ func TestQueueBasicOperations(t *testing.T) {
 		assert.False(t, ok, "dequeue on empty queue should return false")
 		assert.Zero(t, val, "dequeue on empty queue should return zero value")
 	})
+}
+
+func BenchmarkEnqueueDequeueSequential(b *testing.B) {
+	q := New[int]()
+	defer q.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q.Enqueue(i)
+		q.Dequeue()
+	}
+}
+
+func BenchmarkEnqueueDequeueParallel(b *testing.B) {
+	q := New[int]()
+	defer q.Close()
+
+	var wg sync.WaitGroup
+
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				q.Enqueue(1)
+				_, _ = q.Dequeue()
+			}()
+		}
+	})
+	wg.Wait()
+}
+
+func BenchmarkProducerConsumer(b *testing.B) {
+	q := New[int]()
+	defer q.Close()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	b.ResetTimer()
+
+	go func() {
+		defer wg.Done()
+		for i := range b.N {
+			q.Enqueue(i)
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for range b.N {
+			_, _ = q.Dequeue()
+		}
+	}()
+
+	wg.Wait()
 }

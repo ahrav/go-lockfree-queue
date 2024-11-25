@@ -39,6 +39,7 @@ import (
 	"arena"
 	"runtime"
 	"sync/atomic"
+	"time"
 )
 
 // Node represents a node in the queue.
@@ -136,7 +137,8 @@ type Queue[T any] struct {
 
 // New creates a new empty queue with pre-allocated nodes.
 func New[T any]() *Queue[T] {
-	const maxNodes = 1 << 16 // Maximum number of nodes to pre-allocate
+	// const maxNodes = 1 << 16 // Maximum number of nodes to pre-allocate
+	const maxNodes = 1 << 20
 
 	mem := arena.NewArena()
 
@@ -287,9 +289,15 @@ func (q *Queue[T]) Dequeue() (T, bool) {
 func (q *Queue[T]) deferReclamation(node *Node[T]) { q.reclaim.Push(node) }
 
 func (q *Queue[T]) reclaimRoutine() {
+	// TODO: This should be configurable. Currently a higher value cause the benchmarks to panic
+	const defaultInterval = 100 * time.Microsecond
+	ticker := time.NewTicker(defaultInterval)
+	defer ticker.Stop()
+
 	for {
+		<-ticker.C
 		q.cleanupReclaimedNodes()
-		runtime.Gosched() // Give other goroutines a chance
+		// runtime.Gosched() // Give other goroutines a chance
 	}
 }
 
