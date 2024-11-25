@@ -15,7 +15,6 @@ This implementation achieves wait-free progress for enqueue operations and lock-
 
 1. **Lock-Free Operations**: Both enqueue and dequeue operations are implemented without using locks, allowing for high concurrency.
 2. **ABA Problem Mitigation**: Instead of using counters as suggested in the original paper, this implementation uses hazard pointers as a workaround for the ABA problem.
-3. **Memory Management**: Utilizes Go's memory arenas to manage the free list, optimizing memory allocation and deallocation. (Maybe?)
 
 ### Example Usage
 
@@ -32,7 +31,6 @@ import (
 func main() {
 	// Create a new queue.
 	q := queue.New[string]()
-	defer q.Close() // Remember to close to free arena memory
 
 	// Enqueue some values.
 	q.Enqueue("first")
@@ -72,9 +70,8 @@ func main() {
 3. Update the head to point to the new first node.
 4. Return the value from the dequeued node and return the node to the free list.
 
-### Memory Management (EXPERIMENTAL!)
+### Memory Management
 
-- Uses Go's `arena` package for efficient memory allocation.
 - Pre-allocates a fixed number of nodes to avoid dynamic allocation during queue operations.
 - Manages a free list of nodes for reuse, reducing garbage collection pressure.
 

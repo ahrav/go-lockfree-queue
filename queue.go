@@ -1,17 +1,16 @@
-// Package queue implements a lock-free concurrent FIFO queue using pre-allocated nodes
-// in a memory arena. The queue is designed for high-performance concurrent access
-// without locks, making it suitable for multi-producer, multi-consumer scenarios.
+// Package queue implements a lock-free concurrent FIFO queue using pre-allocated nodes.
+// The queue is designed for high-performance concurrent access without locks,
+// making it suitable for multi-producer, multi-consumer scenarios.
 //
-// The queue pre-allocates a fixed number of nodes (65536 by default) in a memory arena
-// for better memory locality and reduced allocation overhead. When the queue is full,
-// attempting to enqueue will panic.
+// The queue pre-allocates a fixed number of nodes (65536 by default)
+// for better memory locality and reduced allocation overhead.
+// When the queue is full, attempting to enqueue will panic.
 //
 // Example usage:
 //
 //	func Example() {
 //		// Create a new queue
 //		q := queue.New[string]()
-//		defer q.Close() // Remember to close to free arena memory
 //
 //		// Enqueue some values
 //		q.Enqueue("first")
@@ -36,7 +35,6 @@
 package queue
 
 import (
-	"arena"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -62,14 +60,12 @@ type Node[T any] struct {
 // reallocated while a thread is still trying to access it.
 type hazardPtr[T any] struct{ ptr atomic.Pointer[Node[T]] }
 
-// hazardTable manages all hazard pointers using arena memory.
+// hazardTable manages all hazard pointers.
 type hazardTable[T any] struct{ pointers []hazardPtr[T] }
 
-func newHazardTable[T any](a *arena.Arena) *hazardTable[T] {
+func newHazardTable[T any]() *hazardTable[T] {
 	maxHazardPointers := 2 * runtime.GOMAXPROCS(0) * 2 // 2 pointers per thread + buffer
-	// Allocate hazard pointers from the arena.
-	pointers := arena.MakeSlice[hazardPtr[T]](a, maxHazardPointers, maxHazardPointers)
-	return &hazardTable[T]{pointers: pointers}
+	return &hazardTable[T]{pointers: make([]hazardPtr[T], maxHazardPointers)}
 }
 
 // Acquire a free hazard pointer.
@@ -131,25 +127,19 @@ type Queue[T any] struct {
 
 	hazard  *hazardTable[T]     // Hazard pointers table
 	reclaim reclamationStack[T] // Reclamation stack
-
-	a *arena.Arena // Arena memory
 }
 
 // New creates a new empty queue with pre-allocated nodes.
 func New[T any]() *Queue[T] {
 	const maxNodes = 1 << 20 // Maximum number of nodes to pre-allocate
 
-	mem := arena.NewArena()
-
-	// Allocate nodes array in arena.
-	nodes := arena.MakeSlice[Node[T]](mem, maxNodes, maxNodes)
+	nodes := make([]Node[T], maxNodes)
 
 	// Initialize queue with a dummy node.
 	q := &Queue[T]{
 		nodes:   nodes,
-		hazard:  newHazardTable[T](mem),
+		hazard:  newHazardTable[T](),
 		reclaim: reclamationStack[T]{},
-		a:       mem,
 	}
 
 	// Initialize all nodes and link them in the free list.
@@ -362,6 +352,3 @@ func (q *Queue[T]) returnNode(node *Node[T]) {
 
 // Empty returns true if the queue is empty.
 func (q *Queue[T]) Empty() bool { return q.head.Load().next.Load() == nil }
-
-// Close releases the arena memory.
-func (q *Queue[T]) Close() { q.a.Free() }

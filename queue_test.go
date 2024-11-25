@@ -10,7 +10,6 @@ import (
 func TestQueueBasicOperations(t *testing.T) {
 	t.Run("enqueue and dequeue single value", func(t *testing.T) {
 		q := New[int]()
-		defer q.Close()
 
 		// Test empty queue.
 		assert.True(t, q.Empty(), "new queue should be empty")
@@ -28,7 +27,6 @@ func TestQueueBasicOperations(t *testing.T) {
 
 	t.Run("FIFO order", func(t *testing.T) {
 		q := New[int]()
-		defer q.Close()
 
 		values := []int{1, 2, 3, 4, 5}
 
@@ -47,7 +45,6 @@ func TestQueueBasicOperations(t *testing.T) {
 
 	t.Run("dequeue empty queue", func(t *testing.T) {
 		q := New[int]()
-		defer q.Close()
 
 		val, ok := q.Dequeue()
 		assert.False(t, ok, "dequeue on empty queue should return false")
@@ -57,10 +54,9 @@ func TestQueueBasicOperations(t *testing.T) {
 
 func BenchmarkEnqueueDequeueSequential(b *testing.B) {
 	q := New[int]()
-	defer q.Close()
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for i := range b.N {
 		q.Enqueue(i)
 		q.Dequeue()
 	}
@@ -68,7 +64,6 @@ func BenchmarkEnqueueDequeueSequential(b *testing.B) {
 
 func BenchmarkEnqueueDequeueParallel(b *testing.B) {
 	q := New[int]()
-	defer q.Close()
 
 	var wg sync.WaitGroup
 
@@ -88,7 +83,6 @@ func BenchmarkEnqueueDequeueParallel(b *testing.B) {
 
 func BenchmarkProducerConsumer(b *testing.B) {
 	q := New[int]()
-	defer q.Close()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
