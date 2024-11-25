@@ -137,8 +137,7 @@ type Queue[T any] struct {
 
 // New creates a new empty queue with pre-allocated nodes.
 func New[T any]() *Queue[T] {
-	// const maxNodes = 1 << 16 // Maximum number of nodes to pre-allocate
-	const maxNodes = 1 << 20
+	const maxNodes = 1 << 20 // Maximum number of nodes to pre-allocate
 
 	mem := arena.NewArena()
 
