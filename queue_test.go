@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"math/rand"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -260,6 +261,7 @@ func TestABAIssueStress(t *testing.T) {
 	q := New[int]()
 	numGoroutines := runtime.NumCPU()
 	const opsPerGoroutine = 1_000
+	totalTarget := uint64(numGoroutines * opsPerGoroutine)
 
 	var wg sync.WaitGroup
 	wg.Add(numGoroutines + 1)
@@ -282,10 +284,10 @@ func TestABAIssueStress(t *testing.T) {
 	for g := 0; g < numGoroutines; g++ {
 		go func(goroutineID int) {
 			defer wg.Done()
-			for i := 0; i < opsPerGoroutine; i++ {
+			for atomic.LoadUint64(&dequeuedCount) < totalTarget {
 				// Add some random delays to increase chance of race conditions.
-				if i%100 == 0 {
-					time.Sleep(time.Microsecond)
+				if rand.Intn(100) == 0 {
+					runtime.Gosched()
 				}
 
 				v, ok := q.Dequeue()
@@ -295,6 +297,8 @@ func TestABAIssueStress(t *testing.T) {
 						t.Errorf("ABA issue detected: value %v dequeued multiple times", v)
 					}
 					atomic.AddUint64(&dequeuedCount, 1)
+				} else {
+					runtime.Gosched()
 				}
 			}
 		}(g)
